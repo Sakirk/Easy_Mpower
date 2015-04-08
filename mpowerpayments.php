@@ -1,7 +1,8 @@
 <?php
+
 /*
 Plugin Name: Mpower Payment Gateway
-Plugin URL: http://www.savekirk.com/mpower
+Plugin URL: https://github.com/Sakirk/EasyMpower
 Description: An Mpower Payments gateway for Easy Digital Downloads
 Version: 1.0
 Author: Saviour Kirk Agbenyegah
@@ -52,7 +53,7 @@ function mp_edd_process_payment( $purchase_data ) {
 		    'MP-Private-Key' => $edd_options['private_test_api_key'],
 		    'MP-Master-Key' => $edd_options['master_key'],
 		    'MP-Token' => $edd_options['test_token'],
-		    'MP-Mode' => $edd_options['test'],
+		    'MP-Mode' => 'test',
 		    'User-Agent' => "MPower Checkout Wordpress plugin" ); 
 	} else {
 		//live url
@@ -63,7 +64,7 @@ function mp_edd_process_payment( $purchase_data ) {
 		    'MP-Private-Key' => $edd_options['private_live_api_key'],
 		    'MP-Master-Key' => $edd_options['master_key'],
 		    'MP-Token' => $edd_options['live_token'],
-		    'MP-Mode' => $edd_options['live'],
+		    'MP-Mode' => 'live',
 		    'User-Agent' => "MPower Checkout Wordpress plugin" ); 
 	}
 
@@ -73,6 +74,7 @@ function mp_edd_process_payment( $purchase_data ) {
 	
 	// check for any stored errors
 	$errors = edd_get_errors();
+	$fail = false;
 	if ( ! $errors ) {
 
 		$purchase_summary = edd_get_purchase_summary( $purchase_data );
@@ -102,6 +104,7 @@ function mp_edd_process_payment( $purchase_data ) {
 		**********************************/
 		//format product details to according to mpower api
 		$id = 0;
+		
 		foreach ($purchase_data['cart_details'] as $pdk => $pd) {
 			$items['item_'.$pd['id']] = array (
 				'name' => $pd['name'],
@@ -117,26 +120,29 @@ function mp_edd_process_payment( $purchase_data ) {
 				'items' => $items,
 				'taxes' => array(),
 				'total_amount' => $purchase_data['price'],
-				'decription' => NULL),
+				'decription' => NULL
+				),
 			'actions' => array (
 				'cancel_url' =>  edd_get_failed_transaction_uri(),
-				'return_url' => get_permalink( $edd_options['success_page']) ),
+				'return_url' => get_permalink( $edd_options['success_page']) 
+				),
 			'store' => array(
-        		'name' => NULL,
-        		'tagline' => NULL,
+        		'name' => get_bloginfo('name'),
+        		'tagline' => get_bloginfo('description'),
         		'postal_address' => NULL ,
         		'phone' => NULL,
        	 		'logo_url' => NULL,
-       			'website_url' => get_site_url() 
-     							 ),
+       			'website_url' => home_url() 
+     			),
      	    'custom_data' => $purchase_data['user_info'],
 			);
 		$jdata = json_encode($mpower_data);
 
 		//send the data over to mpower payment api for authentication
 		$response = wp_remote_post($mp_url, array('headers' => $headers,'body'=> $jdata) );
+		
 		if(!is_wp_error($response)){
-		$response = json_decode($response['body'],true);
+			$response = json_decode($response['body'],true);
 		}
 
 		// check if the data submitted is correct and was successful
@@ -151,9 +157,10 @@ function mp_edd_process_payment( $purchase_data ) {
 		
 	} else {
 		$fail = true; // errors were detected
+		
 	}
 
-	if ( $fail !== false ) {
+	if ( $fail === true ) {
 		// if errors are present, send the user back to the purchase page so they can be corrected
 		edd_send_back_to_checkout( '?payment-mode=' . $purchase_data['post_data']['edd-gateway'] );
 	}
