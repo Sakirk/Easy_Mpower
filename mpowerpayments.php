@@ -4,7 +4,7 @@
 Plugin Name: Mpower Payment Gateway
 Plugin URL: https://github.com/Sakirk/EasyMpower
 Description: An Mpower Payments gateway for Easy Digital Downloads
-Version: 1.0
+Version: 1.1
 Author: Saviour Kirk Agbenyegah
 Author URI: savekirk@gmail.com
 */
@@ -44,34 +44,12 @@ function mp_edd_process_payment( $purchase_data ) {
 	* set transaction mode
 	**********************************/
 
-	if ( edd_is_test_mode() ) {
-		//test url
-		$mp_url = 'https://app.mpowerpayments.com/sandbox-api/v1/checkout-invoice/create';
-		$headers = array(
-			'Accept' => 'application/x-www-form-urlencoded',
-		    'MP-Public-Key' => $edd_options['public_test_api_key'],
-		    'MP-Private-Key' => $edd_options['private_test_api_key'],
-		    'MP-Master-Key' => $edd_options['master_key'],
-		    'MP-Token' => $edd_options['test_token'],
-		    'MP-Mode' => 'test',
-		    'User-Agent' => "MPower Checkout Wordpress plugin" ); 
-	} else {
-		//live url
-		$mp_url = 'https://app.mpowerpayments.com/api/v1/checkout-invoice/create';
-		$headers = array(
-			'Accept' => 'application/x-www-form-urlencoded',
-		    'MP-Public-Key' => $edd_options['public_live_api_key'],
-		    'MP-Private-Key' => $edd_options['private_live_api_key'],
-		    'MP-Master-Key' => $edd_options['master_key'],
-		    'MP-Token' => $edd_options['live_token'],
-		    'MP-Mode' => 'live',
-		    'User-Agent' => "MPower Checkout Wordpress plugin" ); 
-	}
+	$mp_url = get_url();
+	$headers = get_mp_headers();
 
 
 
 
-	
 	// check for any stored errors
 	$errors = edd_get_errors();
 	$fail = false;
@@ -104,7 +82,7 @@ function mp_edd_process_payment( $purchase_data ) {
 		**********************************/
 		//format product details to according to mpower api
 		$id = 0;
-		
+
 		foreach ($purchase_data['cart_details'] as $pdk => $pd) {
 			$items['item_'.$pd['id']] = array (
 				'name' => $pd['name'],
@@ -114,7 +92,7 @@ function mp_edd_process_payment( $purchase_data ) {
 				'description' => NULL );
 			$id++;
 		}
-		
+
 		$mpower_data = array(
 			'invoice' => array(
 				'items' => $items,
@@ -124,7 +102,7 @@ function mp_edd_process_payment( $purchase_data ) {
 				),
 			'actions' => array (
 				'cancel_url' =>  edd_get_failed_transaction_uri(),
-				'return_url' => get_permalink( $edd_options['success_page']) 
+				'return_url' => get_permalink( $edd_options['success_page'])
 				),
 			'store' => array(
         		'name' => get_bloginfo('name'),
@@ -132,15 +110,16 @@ function mp_edd_process_payment( $purchase_data ) {
         		'postal_address' => NULL ,
         		'phone' => NULL,
        	 		'logo_url' => NULL,
-       			'website_url' => home_url() 
+       			'website_url' => home_url()
      			),
      	    'custom_data' => $purchase_data['user_info'],
 			);
 		$jdata = json_encode($mpower_data);
 
 		//send the data over to mpower payment api for authentication
-		$response = wp_remote_post($mp_url, array('headers' => $headers,'body'=> $jdata) );
-		
+		$create_url = $mp_url."create";
+		$response = wp_remote_post($create_url, array('headers' => $headers,'body'=> $jdata) );
+
 		if(!is_wp_error($response)){
 			$response = json_decode($response['body'],true);
 		}
@@ -149,15 +128,15 @@ function mp_edd_process_payment( $purchase_data ) {
 		if ($response['response_code'] == 00) {
 			$receipt_url = $response['response_text'];
 			//update the payment status to complete
-			edd_update_payment_status( $payment, 'complete' );
+			//edd_update_payment_status( $payment, 'complete' );
 			//redirect user to mpower payment site for further transactions
 			wp_redirect($receipt_url);
 			exit();
 		}
-		
+
 	} else {
 		$fail = true; // errors were detected
-		
+
 	}
 
 	if ( $fail === true ) {
@@ -166,6 +145,71 @@ function mp_edd_process_payment( $purchase_data ) {
 	}
 }
 add_action( 'edd_gateway_mpowerpayments', 'mp_edd_process_payment' );
+
+/**
+* Listen for successful purchase and then sends to the processing function
+* since mpowerpayments does not have IPN functionality yet, we use return URL
+*
+* @global $edd_options Array of all the EDD Options
+* @return void
+* @global $edd_options Array of all the EDD Options
+* @return void
+*/
+function edd_listen_for_mpowerpayments_ipn() {
+	global $edd_options;
+
+	if (isset( $_GET['token'])) {
+		$purchase = edd_get_purchase_session();
+		$purchase_key = $purchase["purchase_key"];
+		$payment = edd_get_payment_by("key", $purchase_key);
+		$payment_id = $payment->ID;
+		edd_update_payment_status( $payment_id, 'complete' );
+  				//do_action('edd_verify_mpowerpayments_ipn');
+	}
+}
+add_action( 'init', 'edd_listen_for_mpowerpayments_ipn');
+
+/**
+ * Process mpowerpayments IPN
+ *
+ * @global $edd_options Array of all the EDD Options
+ * @return void
+ */
+ function edd_process_mpowerpayments_ipn() {
+	 global $edd_options;
+
+	 /**********************************
+ 	* set transaction mode
+ 	**********************************/
+
+	 $mp_url = get_url();
+	 $headers = get_mp_headers();
+
+	 //Get Token
+	 $token = $_GET['token'];
+
+	 if ($token == "" || $token == null) {
+	 	 return;
+	 } else {
+			 $confirm_url = $mp_url . "confirm/" . $token;
+			 $response = wp_remote_post($confirm_url, array('headers' => $headers) );
+			 	//var_dump($response);
+
+	 		if(!is_wp_error($response)){
+	 			$response = json_decode($response['body'],true);
+
+				// check if the data submitted is correct and was successful
+		 		if ($response['response_code'] == 00 && $response['status'] == "completed") {
+		 			//update the payment status to complete
+		 			edd_update_payment_status( $payment, 'complete' );
+		 		}
+
+	 		}
+	 }
+
+ }
+ add_action('edd_verify_mpowerpayments_ipn', 'edd_process_mpowerpayments_ipn');
+
 
 
 // adds the settings to the Payment Gateways section
@@ -244,3 +288,46 @@ function mp_edd_add_settings( $settings ) {
 	return array_merge( $settings, $mpower_gateway_settings );
 }
 add_filter( 'edd_settings_gateways', 'mp_edd_add_settings' );
+
+
+//User functions
+function get_url() {
+	global $edd_options;
+	if ( edd_is_test_mode() ) {
+		//test url
+		$mp_url = 'https://app.mpowerpayments.com/sandbox-api/v1/checkout-invoice/';
+	} else {
+		//live url
+		$mp_url = 'https://app.mpowerpayments.com/api/v1/checkout-invoice/';
+	}
+	return $mp_url;
+
+}
+
+function get_mp_headers() {
+	global $edd_options;
+	if ( edd_is_test_mode() ) {
+		//test url
+		$headers = array(
+			'Accept' => 'application/x-www-form-urlencoded',
+				'MP-Public-Key' => $edd_options['public_test_api_key'],
+				'MP-Private-Key' => $edd_options['private_test_api_key'],
+				'MP-Master-Key' => $edd_options['master_key'],
+				'MP-Token' => $edd_options['test_token'],
+				'MP-Mode' => 'test',
+				'User-Agent' => "MPower Checkout Wordpress plugin" );
+	} else {
+		//live url
+		$headers = array(
+			'Accept' => 'application/x-www-form-urlencoded',
+				'MP-Public-Key' => $edd_options['public_live_api_key'],
+				'MP-Private-Key' => $edd_options['private_live_api_key'],
+				'MP-Master-Key' => $edd_options['master_key'],
+				'MP-Token' => $edd_options['live_token'],
+				'MP-Mode' => 'live',
+				'User-Agent' => "MPower Checkout Wordpress plugin" );
+	}
+
+
+	return $headers;
+}
